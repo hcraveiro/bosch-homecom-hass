@@ -49,3 +49,7 @@ candidate power-state indicator; confirm across multiple cycles before using it.
 The snapshots are held in memory and disappear on integration unload/restart.
 Only GET-style bulk reads are issued. No PUT, control entity, or on/off command
 is implemented. Avoid sharing raw responses without checking for sensitive data.
+
+## v0.2.0 discovery
+
+Capture now explores references advertised by the device. Discovery is read-only, at most 90 paths, 20 paths per request and three expansion rounds. The response includes `queried_count` and all supported and unsupported paths. Re-capture both physical states after upgrading; old captures are not retained across restarts.
