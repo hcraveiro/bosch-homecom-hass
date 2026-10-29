@@ -12,6 +12,11 @@ from homeassistant.exceptions import HomeAssistantError
 
 from .const import DOMAIN, PATHS
 
+MAX_DEPTH = 3
+MAX_PATHS = 90
+BATCH_SIZE = 20
+ROOT_PATHS = ("/system", "/dhwCircuits", "/heatSources")
+
 BOSCH_DOMAIN = "bosch_homecom"
 BOSCH_READ_SERVICE = "get_recordings_service"
 
@@ -47,23 +52,43 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         if not hass.services.has_service(BOSCH_DOMAIN, BOSCH_READ_SERVICE):
             raise HomeAssistantError("Bosch HomeCom read service is not available")
 
-        result = await hass.services.async_call(
-            BOSCH_DOMAIN,
-            BOSCH_READ_SERVICE,
-            {"device_id": device_id, "paths": list(PATHS)},
-            blocking=True,
-            return_response=True,
-        )
-        if not isinstance(result, dict):
-            raise HomeAssistantError("Bosch HomeCom returned an invalid response")
-
-        # The upstream bulk response may include unsupported paths; do not
-        # interpret missing paths as 'off'.
-        payload = {
-            path: deepcopy(result[path])
-            for path in PATHS
-            if path in result
-        }
+        pending = set(ROOT_PATHS) | set(PATHS)
+        visited: set[str] = set()
+        payload: dict[str, Any] = {}
+        depth = 0
+        while pending and depth <= MAX_DEPTH and len(visited) < MAX_PATHS:
+            current = sorted(pending - visited)[: min(BATCH_SIZE, MAX_PATHS - len(visited))]
+            if not current:
+                break
+            pending.difference_update(current)
+            visited.update(current)
+            result = await hass.services.async_call(
+                BOSCH_DOMAIN, BOSCH_READ_SERVICE,
+                {"device_id": device_id, "paths": current},
+                blocking=True, return_response=True,
+            )
+            if not isinstance(result, dict):
+                raise HomeAssistantError("Bosch HomeCom returned an invalid response")
+            discovered: set[str] = set()
+            for resource_path in current:
+                node = result.get(resource_path)
+                if not isinstance(node, dict):
+                    continue
+                payload[resource_path] = deepcopy(node)
+                for ref in node.get("references", []):
+                    if not isinstance(ref, dict):
+                        continue
+                    child = ref.get("id")
+                    if (
+                        isinstance(child, str) and child.startswith("/")
+                        and not child.startswith("//") and ".." not in child
+                        and "?" not in child and len(child) < 180
+                    ):
+                        discovered.add(child)
+            if depth < MAX_DEPTH:
+                pending.update(discovered - visited)
+            depth += 1
+        queried = sorted(visited)
         snapshots[label] = {
             "device_id": device_id,
             "captured_at": datetime.now(timezone.utc).isoformat(),
@@ -72,8 +97,11 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         return {
             "label": label,
             "captured_at": snapshots[label]["captured_at"],
-            "supported_paths": list(payload),
-            "unsupported_or_empty_paths": [p for p in PATHS if p not in payload],
+            "supported_paths": sorted(payload),
+            "queried_count": len(queried),
+            "depth_limit": MAX_DEPTH,
+            "path_limit": MAX_PATHS,
+            "unsupported_or_empty_paths": [p for p in queried if p not in payload],
             "values": payload,
         }
 
