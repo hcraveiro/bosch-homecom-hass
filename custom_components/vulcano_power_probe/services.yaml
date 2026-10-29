@@ -1,0 +1,21 @@
+capture:
+  name: Capture read-only appliance snapshot
+  description: Capture a snapshot using Bosch HomeCom's existing bulk read service.
+  fields:
+    device_id:
+      name: Device ID
+      required: true
+      selector:
+        text:
+    label:
+      name: Snapshot label
+      description: Use on or off, after physically changing appliance power.
+      required: true
+      selector:
+        select:
+          options:
+            - "on"
+            - "off"
+compare:
+  name: Compare captured appliance snapshots
+  description: Return changed response fields between on and off captures.
